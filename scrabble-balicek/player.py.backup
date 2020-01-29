@@ -1,0 +1,375 @@
+import base
+import random
+import itertools
+
+class Coord:      
+    def __init__(self, row, col):
+        self.row = row
+        self.col = col
+
+    def __getitem__(self, index):
+        if index == 2:
+            raise StopIteration()
+        return self.row if index == 0 else self.col
+
+    def __setitem__(self, index, value):
+        assert(index == 0 or index == 1)
+        if index == 0:
+            self.row = value
+        else:
+            self.col = value
+
+    def __sub__(self, other) -> int:
+        assert(self.row == other.row or self.col == other.col)
+        return other.row - self.row if other.row == self.row else other.col - self.col
+
+    def is_between(begin, end) -> bool:
+        assert(begin.row == end.row or begin.col == end.col)
+        if begin.row == end.row:
+            return self.row == begin.row and begin.col <= self.col and self.col < end.col
+
+        return self.col == begin.col and begin.row <= self.row and self.row < end.row
+
+        
+
+
+class Move:
+    
+    def __init__(self, row, col, letter, score):
+        self.coord = Coord(row, col)
+        self.letter = letter
+        self.score = score
+
+class Player(base.BasePlayer):
+
+    
+    def __init__(self, name, dictionary, board, bag, bigBagSize):
+        base.BasePlayer.__init__(self, name, dictionary, board, bag, bigBagSize) #always keep this line and DON't change it
+        self.text = "Thomas.the.Dank.Engine" #fill the name of your awesome player!
+        self.other_passed = False
+        self.passed = False
+        self.simple_moves = []
+        self.neighbour_deltas = ((1,0), (0,1), (-1,0), (0,-1))
+
+    def update(self, board, bag, my_score, other_score, letters_in_bag):
+        #The other player passed a turn or something like that
+        self.other_passed = other_score == self.otherScore
+        self.passed = my_score == self.myScore
+
+        base.BasePlayer.update(self, board, bag, my_score, other_score, letters_in_bag)
+
+    def inBoard(self, coord : Coord, dummy = None):
+        if not isinstance(dummy, type(None)):
+            coord = (coord, dummy)
+        return base.BasePlayer.inBoard(self, *coord)
+
+    def isEmpty(self, coord : Coord, dummy = None):
+        if not isinstance(dummy, type(None)):
+            coord = (coord, dummy)
+        return base.BasePlayer.isEmpty(self, *coord)
+
+    def cellValue(self, coord : Coord, dummy = None):
+        if not isinstance(dummy, type(None)):
+            coord = (coord, dummy)
+        return base.BasePlayer.cellValue(self, *coord)          
+
+
+    def consider_simple_moves(self, heat_map, useable_squares):
+        best = Move(None, None, None,0)
+        self.simple_moves = []
+
+        for coord, letter in itertools.product(useable_squares, set(self.bag)):
+            row, col = coord
+            self.board[row][col] = letter 
+
+            first, end = self.find_longest_word(self.board, coord, False)
+            vertically = ''.join(self.board[y][col] for y in range(first[0], end[0]))
+            first, end = self.find_longest_word(self.board, coord, True)
+            horizontally = ''.join(self.board[row][x] for x in range(first[1], end[1]))
+            
+            self.board[row][col] = ''
+
+            if len(vertically) > 1 and vertically not in self.dictionary:
+                continue
+            if len(horizontally) > 1 and horizontally not in self.dictionary:
+                continue
+                
+            score = heat_map[row][col] + self.cellValue(row, col) * self.letterValue(letter)
+            move = Move(row, col, letter, score)
+            self.simple_moves.append(move)
+
+            if score > best.score:
+                best = move
+        return ([[*best.coord, best.letter]], best.score) if best.score else None
+
+    def are_connected(self, A : tuple, B : tuple):
+        if B[1] < A[1] or B[0] < A[0]:
+            B, A = A, B
+
+        if A[0] == B[0]: #horizontally
+            return all(not self.isEmpty(A[0], x) for x in range(A[1], B[1]))
+        else:
+            return all(not self.isEmpty(y, A[1]) for y in range(A[0], B[0]))
+
+
+    def consider_complex_moves(self, heat_map, useable_squares):
+        best = (None, 0)
+        return best
+
+        self.simple_moves.sort(key= lambda x: x.score)
+
+        for index, A in zip(range(10), self.simple_moves):
+            for B in filter(lambda x: (x.row == A.row) or (x.col == A.col), self.simple_moves):
+                if (A.col == B.col and A.row == B.row):
+                    continue
+
+                self.board[A.row][A.col] = A.letter
+                self.board[B.row][B.col] = B.letter
+                if not self.are_connected(A.coord(), B.coord()):
+                    continue
+
+                horizontally = A.row == B.row
+                begin, end = self.find_longest_word(self.board, (A.row, A.col), horizontally)
+                                  
+                word = ''
+                score = 0
+
+                if horizontally:
+                    word = ''.join(self.board[A.row][x] for x in range(begin[1], end[1]))
+                    score = A.score + B.score - self.word_value(self.board, (A.row, A.col+1), (B.row, B.col)) 
+                else:
+                    word = ''.join(self.board[y][A.col] for y in range(begin[0], end[0]))
+                    score = A.score + B.score - self.word_value(self.board, (A.row+1, A.col), (B.row, B.col)) 
+
+                self.board[A.row][A.col] = ''
+                self.board[B.row][B.col] = ''
+
+                if word not in self.dictionary:
+                    continue
+                
+                if score > best[1]:
+                    best = ([[A.row, A.col, A.letter], [B.row, B.col, B.letter]], score) 
+
+        return best if best[1] else None
+
+    def consider_pass(self):
+
+        if self.lettersInBag == 0: #If there would not be anything to get, change nothing
+            return None
+        if self.lettersInBag <= 7: #If there is no more than one bag remaining, get it all!
+            return ''.join(self.bag[:self.lettersInBag])
+
+        if self.lettersInBag > 24: #During the early game exhaust the bag as fast as possible
+            return ''.join(self.bag) #by exchanging seven letters every time
+
+        #Now we are in the late-game.. .There is 8 to 24 letters in the bag
+
+        if self.passed or self.other_passed: #If we need to keep playing to increase the score
+            random.shuffle(self.bag)
+            return ''.join()
+
+        return None
+
+    def move(self):
+        """
+            the main function of your player. This function is called by the gaming server to obtain
+            your move. 
+            Possible moves are:   
+              return None     - this means to 'pass' (score/board/bag are not changed)
+              return "hello"  - string of letters that you want to replace. Letters can repeat. 
+                                Only letters in 'self.bag' can be used here. Not more than 7 letters.
+              return [ [r1,c1,L1], [ r2,c2,L2]  ... [rn,cn,Ln] ], where 'r_x' is row, 'c_x' is columns and 'Lx' is the letter
+                                that you want to place to the board.
+                                You don't have to place these letters to self.board, it will be done anyway by Brute
+        """
+
+        heat_map, useable_squares = self.build_heat_map()
+
+        simple_move, simple_score = self.consider_simple_moves(heat_map, useable_squares)
+        complex_move, complex_score = self.consider_complex_moves(heat_map, useable_squares)
+        
+        if simple_score == 0 and complex_score == 0:
+            return self.consider_pass()
+
+        return simple_move if simple_score > complex_score else complex_move
+
+
+    def build_heat_map(self) -> tuple:
+        heat_map = [[0] * self.cols for i in range(self.rows)]
+        useable_squares = []
+        for y,x in  itertools.product(range(self.rows), range(self.cols)):
+            pos = Coord(y,x)
+            if not self.isEmpty(pos): #If this square is already filled by a letter
+                continue
+            #if the square is not surrounded by any letter
+            if not any(self.inBoard(neighbour) and not self.isEmpty(neighbour) for neighbour in (Coord(pos.row + dy, pos.col + dx) for dy, dx in self.neighbour_deltas)):
+                continue
+
+            #find four potentially surrounding words
+            neighbouring_words = (self.find_longest_word(self.board, Coord(pos.row + dy, pos.col + dx), dx != 0) for dy, dx in self.neighbour_deltas)
+            
+            heat_map[pos.row][pos.col] = sum(map(lambda word_bounds: self.word_value(self.board, *word_bounds), neighbouring_words))
+            if heat_map[pos.row][pos.col]: #Only non zero value is interesting for us to get that juicy scrabble money
+                useable_squares.append(pos)
+
+        return heat_map, useable_squares    
+  
+    def word_value(self, board: list, begin: Coord, end: Coord) -> int:
+        assert(begin.row == end.row or begin.col == end.col)
+
+        if (begin.row == end.row): #Summing horizontally
+            return sum(self.letterValue(board[begin.row][x]) * self.cellValue(begin.row, x) for x in range(begin.col, end.col))
+        return sum(self.letterValue(board[y][begin.col]) * self.cellValue(y, begin.col) for y in range(begin.row, end.row))
+
+    def find_longest_word(self, board : list, start : Coord, horizontally : bool) -> tuple:
+        if not self.inBoard(start) or self.isEmpty(start):
+            return (start, start)
+
+        changed_index = 1 if horizontally else 0
+
+        end = Coord(start.row, start.col)
+
+        while self.inBoard(start) and not self.isEmpty(start):
+            start[changed_index] -= 1
+        start[changed_index] += 1 
+        while self.inBoard(end) and not self.isEmpty(end):
+            end[changed_index] += 1
+        return (start, end)
+
+    def word_length(self, start : Coord, end : Coord) -> int:
+        assert(start.row == end.row or start.col == end.col)
+        return end - start
+
+
+    def compute_score(self, moves: list, board: list) -> int:
+        moves = [Move(row, col, letter, 0) for row, col, letter in moves]
+
+        moves.sort(key = lambda move: move.coord.row * self.cols + move.coord.col)
+        first, last = moves[0], moves[-1]
+        assert(first.coord.col == last.coord.col or first.coord.row == last.coord.row) #All letters lie either in the same row or column
+        assert(all(self.inBoard(move.coord) for move in moves))
+
+        horizontally = first.coord.row == last.coord.row
+        word_bounds = [self.find_longest_word(board, change.coord, not horizontally) for change in moves]
+        word_bounds.append(self.find_longest_word(board, first.coord, horizontally))
+
+        return sum(self.word_value(board, *bounds) for bounds in word_bounds if self.word_length(*bounds) > 1)
+
+
+def replaceLetters(player, lettersToReplace, bag):
+    print("Player ", player.name, " want's to exchange ", len(lettersToReplace), ", bag has " , len(bag) , " letters")
+        
+    if (len(lettersToReplace) > 7 or len(lettersToReplace) > len(bag)):
+        print("No replacement will be made, as the user either wants to replace >7 letters or more than than letters in the bag")
+        return player.bag
+
+    listLetters = list(lettersToReplace)
+    newBag = []
+    for letter in player.bag:
+        if letter not in listLetters:
+            newBag.append(letter)
+        else:
+            listLetters.remove(letter)
+           
+    new = "" 
+    for i in range(len(lettersToReplace)):
+        if len(bag) > 0:
+            newBag.append(bag.pop())
+            new += newBag[-1]
+    print("New replacement ", new)
+    return newBag
+
+
+
+def afterMove(lastPlayer, lastPlayerResult, nextPlayer, board, bag):
+
+    """
+        simplifed game handling procedure. We assume here that both player behave correctly, e.g. they do not
+        invalide their 'self.bag' etc..
+
+        On Brute/Tournament, this function will also check all return types and validiy of actions
+    """
+
+    if (lastPlayerResult is None):
+        #player 'pass', no change
+        print("Player ", lastPlayer.name, " is passing ")
+        return 0
+    
+    if isinstance(lastPlayerResult, str):
+    
+        newBag = replaceLetters(lastPlayer, lastPlayerResult, bag)    
+        lastPlayer.update(board,newBag, lastPlayer.myScore, nextPlayer.myScore, len(bag))
+        #the second player does not need to be updated, as the board didn't
+        #change
+        return 0
+
+    if isinstance(lastPlayerResult,list):
+        #player is placing some letters to the game
+        print("Player ", lastPlayer.name , " is placing stuff .. ", lastPlayerResult)
+        lettersToReplace = ""
+        board_changes = 0
+        for change in lastPlayerResult:
+            assert(isinstance(change, list) and len(change) == 3)
+            row, col, letter = change
+            if lastPlayer.inBoard(row, col) and board[row][col] == "":
+                board[row][col] = letter
+                lettersToReplace += letter
+                print("Placing ", letter, "at ", row,col)
+                board_changes+=1
+        score_gain = lastPlayer.compute_score(lastPlayerResult, board)
+        print("Score increased by %d" % score_gain)
+
+        newBag = replaceLetters(lastPlayer, lettersToReplace, bag)
+        lastPlayer.update(board, newBag, lastPlayer.myScore + score_gain, nextPlayer.myScore, len(bag))
+        nextPlayer.update(board, nextPlayer.bag, nextPlayer.myScore, lastPlayer.myScore + score_gain, len(bag))
+        return board_changes
+
+    print("Wrong result from player.move; exit now")
+    quit()
+    return 0
+
+if __name__ == "__main__":
+
+    
+
+
+    words = base.readDictionary('dic.txt') #words is represented as python-dictionray
+
+    #board = base.createBoard("ALP") #this word should be from the dictionray
+    board = base.createBoard(random.choice(list(words))) #random word from the dictionray
+
+    bag = base.createInitialBag()
+
+    player1bag = bag[0:7]   #letters for the player1
+    player2bag = bag[7:14]  #letters for the player2
+    bag = bag[14:] #remove first 14 letters
+
+
+    p1 = Player("player1", words, board, player1bag, len(bag))
+    p2 = Player("player2", words, board, player2bag, len(bag))
+    p1.print()
+
+    noChangeMoves = 0
+    while noChangeMoves < 3:
+
+        result = p1.move()
+        s1 = afterMove(p1, result, p2, board, bag)
+
+        p1.print()
+
+        result = p2.move()
+        s2 = afterMove(p2, result, p1, board, bag)
+        
+        p2.print()
+
+        if s1 + s2 == 0:
+            noChangeMoves+=1
+        else:
+            noChangeMoves = 0
+
+
+    print("Game finished after " , noChangeMoves , " moves without change of score ")
+
+
+
+

@@ -1,0 +1,1 @@
+grep -C 2 "Game finished" result | grep score | sed "s/.score=/ /g" | sed "s/,//g" | sed "s/<br\/>//g" | python process.py 
